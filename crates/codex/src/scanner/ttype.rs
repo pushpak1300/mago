@@ -179,6 +179,11 @@ where
                 }
             }
 
+            // No value can satisfy an intersection with a non-intersectable member, such as `int&string`.
+            if intersection_types.is_empty() {
+                return get_never();
+            }
+
             TUnion::from_vec(intersection_types)
         }
         Hint::Iterable(_) => get_mixed_iterable(),

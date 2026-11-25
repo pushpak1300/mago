@@ -5,14 +5,17 @@ use mago_syntax::cst::Expression;
 use crate::plugin::context::HookContext;
 use crate::plugin::hook::ExpressionHookResult;
 use crate::plugin::hook::HookResult;
-use crate::plugin::provider::Provider;
 
 /// Hook trait for intercepting expression analysis.
 ///
 /// This hook receives the real CST expression and full mutable context,
 /// allowing hooks to inspect expressions, report issues, modify analysis state,
 /// and optionally skip analysis with a custom type.
-pub trait ExpressionHook: Provider {
+///
+/// Unlike the other hooks, it does not require [`Provider`](crate::plugin::provider::Provider):
+/// expression hooks are dispatched without reading provider metadata, so implementors
+/// only need to be thread-safe.
+pub trait ExpressionHook: Send + Sync {
     /// Called before an expression is analyzed.
     ///
     /// Return `ExpressionHookResult::Continue` to proceed with normal analysis,

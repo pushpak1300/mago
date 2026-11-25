@@ -2145,6 +2145,18 @@ mod tests {
         assert!(indices.is_empty());
     }
 
+    struct TestExpressionHook;
+
+    impl ExpressionHook for TestExpressionHook {}
+
+    #[test]
+    fn test_register_expression_hook_without_provider() {
+        let mut registry = PluginRegistry::new();
+        registry.register_expression_hook(TestExpressionHook);
+
+        assert!(registry.has_expression_hooks());
+    }
+
     #[test]
     fn external_analyzer_errors_remain_structured() {
         let handle = ExternalAnalyzerHandle::pending(std::thread::spawn(|| {

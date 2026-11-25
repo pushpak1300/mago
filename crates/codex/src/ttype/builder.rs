@@ -64,6 +64,79 @@ fn get_nullable_union_from_type(
     })
 }
 
+/// Converts a union type node using an explicit work stack instead of recursion.
+///
+/// `A|B|C|...` parses into a chain of binary union nodes, one per `|`, so recursing into
+/// both operands would use one stack frame per member and overflow on long unions.
+///
+/// Each binary node is still combined on its own, left operand first, so the result is
+/// the same as converting the operands recursively.
+fn get_union_from_union_type(
+    ttype: &Type<'_>,
+    scope: &NamespaceScope,
+    type_context: &TypeResolutionContext,
+    classname: Option<Word>,
+) -> Result<TUnion, TypeError> {
+    enum Task<'node, 'arena> {
+        Build(&'node Type<'arena>),
+        BuildNullable(&'node Type<'arena>),
+        MakeNullable,
+        Combine,
+    }
+
+    let mut tasks = vec![Task::Build(ttype)];
+    let mut results: Vec<TUnion> = vec![];
+    while let Some(task) = tasks.pop() {
+        match task {
+            Task::Build(Type::Union(UnionType { left, right, .. })) if matches!(**left, Type::Null(_)) => {
+                tasks.push(Task::BuildNullable(right));
+            }
+            Task::Build(Type::Union(UnionType { left, right, .. })) if matches!(**right, Type::Null(_)) => {
+                tasks.push(Task::BuildNullable(left));
+            }
+            Task::Build(Type::Union(UnionType { left, right, .. })) => {
+                tasks.push(Task::Combine);
+                tasks.push(Task::Build(right));
+                tasks.push(Task::Build(left));
+            }
+            Task::Build(inner) => {
+                results.push(get_union_from_type(inner, scope, type_context, classname)?);
+            }
+            Task::BuildNullable(inner @ Type::Union(_)) => {
+                tasks.push(Task::MakeNullable);
+                tasks.push(Task::Build(inner));
+            }
+            Task::BuildNullable(inner) => {
+                results.push(get_nullable_union_from_type(inner, scope, type_context, classname)?);
+            }
+            Task::MakeNullable => {
+                let Some(inner) = results.pop() else {
+                    unreachable!("a nullable union task always follows its operand");
+                };
+
+                results.push(inner.as_nullable());
+            }
+            Task::Combine => {
+                let (Some(right), Some(left)) = (results.pop(), results.pop()) else {
+                    unreachable!("a union combine task always follows both of its operands");
+                };
+
+                let mut combined_types = Vec::with_capacity(left.types.len() + right.types.len());
+                combined_types.extend(left.types.into_owned());
+                combined_types.extend(right.types.into_owned());
+
+                results.push(TUnion::from_vec(combined_types));
+            }
+        }
+    }
+
+    let Some(result) = results.pop() else {
+        unreachable!("a union always produces a type");
+    };
+
+    Ok(result)
+}
+
 /// Rejects a bare variable used as a docblock tag type when it cannot be resolved.
 ///
 /// Psalm-style parameter links (`@param $prototype $value`, `@return $value`) lower a
@@ -137,22 +210,7 @@ pub fn get_union_from_type(
         Type::Nullable(nullable_type) => {
             get_nullable_union_from_type(nullable_type.inner, scope, type_context, classname)?
         }
-        Type::Union(UnionType { left, right, .. }) if matches!(**left, Type::Null(_)) => {
-            get_nullable_union_from_type(right, scope, type_context, classname)?
-        }
-        Type::Union(UnionType { left, right, .. }) if matches!(**right, Type::Null(_)) => {
-            get_nullable_union_from_type(left, scope, type_context, classname)?
-        }
-        Type::Union(union_type) => {
-            let left = get_union_from_type(union_type.left, scope, type_context, classname)?;
-            let right = get_union_from_type(union_type.right, scope, type_context, classname)?;
-
-            let mut combined_types = Vec::with_capacity(left.types.len() + right.types.len());
-            combined_types.extend(left.types.into_owned());
-            combined_types.extend(right.types.into_owned());
-
-            TUnion::from_vec(combined_types)
-        }
+        Type::Union(_) => get_union_from_union_type(ttype, scope, type_context, classname)?,
         Type::Intersection(intersection) => {
             let object_and_callable = (matches!(intersection.left, Type::Object(_))
                 && matches!(intersection.right, Type::Callable(_)))
